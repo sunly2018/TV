@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.androidsdk/
+.idea/
+*.iml
+.DS_Store
+build.log
+lint.log
