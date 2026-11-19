@@ -486,7 +486,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         if (!settingsStore.onlineCovers.value) return
         val library = _ui.value.library ?: return
         val targets = library.groups.filter { group ->
-            force || (!coverStore.fileOf(group.id).exists() && !coverStore.missFile(group.id).exists())
+            force || (!_covers.value.containsKey(group.id) && !coverStore.missFile(group.id).exists())
         }
         if (targets.isEmpty()) return
         coverJob = viewModelScope.launch {
@@ -511,6 +511,44 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun loadCoverCandidates(id: String, onResult: (List<CoverCandidate>) -> Unit) {
+        viewModelScope.launch {
+            val group = _ui.value.library?.groups?.firstOrNull { it.id == id }
+            if (group == null) {
+                onResult(emptyList())
+                return@launch
+            }
+            val online = runCatching { coverFetcher.fetchCandidates(group.title) }
+                .getOrDefault(emptyList())
+            if (online.isNotEmpty()) {
+                onResult(online)
+                return@launch
+            }
+            // 网上没有结果时先给当前海报，再从影片里补几帧，用户不用干等
+            val poster = withContext(Dispatchers.IO) {
+                val file = thumbnails.posterFile(id)
+                runCatching {
+                    if (file.exists() && file.length() > 0) file.readBytes() else null
+                }.getOrNull()
+            }
+            val local = poster?.let { listOf(CoverCandidate(it, it)) }.orEmpty()
+            if (local.isNotEmpty()) onResult(local)
+            val video = group.episodes.firstOrNull()?.path ?: return@launch
+            val frames = withContext(Dispatchers.IO) {
+                val path = MediaPaths.resolve(getApplication(), video)
+                thumbnails.frameCandidates(path).map { CoverCandidate(it, it) }
+            }
+            if (frames.isNotEmpty()) onResult(local + frames)
+        }
+    }
+
+    fun saveCoverBytes(id: String, bytes: ByteArray) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val path = coverStore.save(id, bytes) ?: return@launch
+            _covers.update { it + (id to path) }
+        }
+    }
+
     private fun scheduleUploadRescan() {
         uploadRescanJob?.cancel()
         uploadRescanJob = viewModelScope.launch {
@@ -519,15 +557,18 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun Library.repairPosters(): Library = copy(
-        groups = groups.map { group ->
-            val poster = group.posterPath
-            if (poster != null && File(poster).exists()) {
-                group
-            } else {
+    private fun Library.repairPosters(): Library {
+        val currentDir = thumbnails.directory
+        return copy(
+            groups = groups.map { group ->
+                val poster = group.posterPath
                 val file = thumbnails.posterFile(group.id)
-                group.copy(posterPath = if (file.exists()) file.absolutePath else null)
+                if (poster != null && File(poster).parentFile == currentDir && File(poster).exists()) {
+                    group
+                } else {
+                    group.copy(posterPath = if (file.exists()) file.absolutePath else null)
+                }
             }
-        }
-    )
+        )
+    }
 }

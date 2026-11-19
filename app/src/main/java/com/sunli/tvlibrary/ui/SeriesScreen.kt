@@ -1,5 +1,6 @@
 package com.sunli.tvlibrary.ui
 
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -7,11 +8,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -43,6 +44,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -55,6 +57,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
@@ -62,17 +66,20 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import coil.compose.AsyncImage
+import com.sunli.tvlibrary.data.CoverCandidate
 import com.sunli.tvlibrary.data.MediaGroup
 import com.sunli.tvlibrary.data.MediaPaths
 import com.sunli.tvlibrary.data.PlaybackPrefs
 import com.sunli.tvlibrary.player.AudioOnlyRenderersFactory
 import com.sunli.tvlibrary.player.AudioTracks
 import com.sunli.tvlibrary.player.VideoSurface
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private const val PAGE_SIZE = 10
-private const val MENU_HIDE_MS = 3000L
+private const val MENU_HIDE_MS = 2000L
 private const val SEEK_STEP_MS = 10_000L
 
 // 音量键交给系统处理，不唤出也不影响菜单倒计时
@@ -91,6 +98,8 @@ fun SeriesScreen(
     onToggleEncrypt: () -> Unit,
     onDelete: () -> Unit,
     onPurge: () -> Unit,
+    onLoadCoverCandidates: ((List<CoverCandidate>) -> Unit) -> Unit,
+    onChooseCover: (ByteArray) -> Unit,
     onPlay: (Int) -> Unit,
     onExit: () -> Unit
 ) {
@@ -126,6 +135,9 @@ fun SeriesScreen(
         menuVisible = true
         menuEpoch++
     }
+
+    var coverDialogOpen by remember { mutableStateOf(false) }
+    var coverCandidates by remember { mutableStateOf<List<CoverCandidate>?>(null) }
 
     // 进入详情页/从播放页返回时直接在背景里续播，菜单收起后就是全屏视频
     val exoPlayer = remember(group.id) {
@@ -194,6 +206,28 @@ fun SeriesScreen(
         onDispose { view.keepScreenOn = false }
     }
 
+    // 选海报要从同一个文件抽帧，必须放掉背景播放器的硬件解码器，否则抽帧会卡死；
+    // 关闭后从原位恢复播放
+    var resumePosition by remember(group.id) { mutableLongStateOf(-1L) }
+    LaunchedEffect(coverDialogOpen) {
+        if (coverDialogOpen) {
+            resumePosition = runCatching { exoPlayer.currentPosition.coerceAtLeast(0L) }
+                .getOrDefault(-1L)
+            runCatching {
+                prefs.saveProgress(startEpisode.path, resumePosition, exoPlayer.duration)
+                exoPlayer.stop()
+            }
+        } else if (resumePosition >= 0L) {
+            val position = resumePosition
+            resumePosition = -1L
+            runCatching {
+                exoPlayer.seekTo(position)
+                exoPlayer.playWhenReady = true
+                exoPlayer.prepare()
+            }
+        }
+    }
+
     // 进播放页前先停掉背景播放，避免两个播放器同时占着同一个文件
     fun openPlayer(index: Int) {
         runCatching {
@@ -208,9 +242,9 @@ fun SeriesScreen(
         onPlay(index)
     }
 
-    // 菜单露出后 3 秒没有操作就收起；有确认框时不收
-    LaunchedEffect(menuVisible, menuEpoch, confirmDelete, confirmPurge) {
-        if (menuVisible && !confirmDelete && !confirmPurge) {
+    // 菜单露出后 1 秒没有操作就收起，直接进入播放；选海报/确认框期间不收起
+    LaunchedEffect(menuVisible, menuEpoch, confirmDelete, confirmPurge, coverDialogOpen) {
+        if (menuVisible && !confirmDelete && !confirmPurge && !coverDialogOpen) {
             delay(MENU_HIDE_MS)
             menuVisible = false
             runCatching { rootFocus.requestFocus() }
@@ -272,6 +306,22 @@ fun SeriesScreen(
     }
 
     val poster = coverPath ?: group.posterPath
+    var posterAspect by remember(poster) { mutableStateOf<Float?>(null) }
+    LaunchedEffect(poster) {
+        posterAspect = null
+        if (poster != null) {
+            posterAspect = withContext(Dispatchers.IO) {
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(poster, options)
+                if (options.outWidth > 0 && options.outHeight > 0) {
+                    options.outWidth.toFloat() / options.outHeight
+                } else {
+                    null
+                }
+            }
+        }
+    }
+    val portraitPoster = posterAspect?.let { it < 1f } == true
     Box(
         Modifier
             .fillMaxSize()
@@ -311,13 +361,33 @@ fun SeriesScreen(
             exit = fadeOut(tween(320))
         ) {
             Box(Modifier.fillMaxSize()) {
+                if (poster != null) {
+                    AsyncImage(
+                        model = File(poster),
+                        contentDescription = null,
+                        contentScale = if (portraitPoster) ContentScale.Fit else ContentScale.Crop,
+                        alignment = if (portraitPoster) Alignment.CenterStart else Alignment.Center,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                0f to Color(if (portraitPoster) 0x8C0A0C10 else 0xE60A0C10),
+                                0.55f to Color(0x990A0C10),
+                                1f to Color(0x400A0C10)
+                            )
+                        )
+                )
                 Box(
                     Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
-                                0f to Color(0xD90A0C10),
-                                0.5f to Color(0x8C0A0C10),
+                                0f to Color.Transparent,
+                                0.55f to Color(0x400A0C10),
                                 1f to Color(0xF20A0C10)
                             )
                         )
@@ -325,93 +395,94 @@ fun SeriesScreen(
                 Column(
                     Modifier
                         .fillMaxSize()
-                        .padding(start = 56.dp, end = 56.dp, top = 28.dp)
+                        .padding(start = 56.dp, end = 56.dp, top = 28.dp, bottom = 16.dp)
                 ) {
-                    Text("${group.kind.label} · 按返回键退出", color = TextSecondary, fontSize = 12.sp)
+                    Text("${group.kind.label} · 按返回键退出", color = Color(0xCCFFFFFF), fontSize = 12.sp)
                     Spacer(Modifier.height(10.dp))
                     Text(
                         text = group.title,
-                        color = TextPrimary,
-                        fontSize = 30.sp,
+                        color = Color.White,
+                        fontSize = 38.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "共 ${group.episodes.size} 集 · ${group.folder}",
-                        color = TextSecondary,
+                        text = buildString {
+                            append(group.kind.label)
+                            if (group.episodes.size > 1) append(" · 共 ${group.episodes.size} 集")
+                            val size = formatSize(group.episodes.sumOf { it.sizeBytes })
+                            if (size.isNotEmpty()) append(" · $size")
+                        },
+                        color = Color(0xFFE7EAEE),
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = group.folder,
+                        color = Color(0x99FFFFFF),
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.weight(1f))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .width(if (coverPath != null) 168.dp else 340.dp)
-                                .aspectRatio(if (coverPath != null) 2f / 3f else 16f / 9f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(SurfaceDark)
-                        ) {
-                            if (poster != null) {
-                                AsyncImage(
-                                    model = File(poster),
-                                    contentDescription = group.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Text(
-                                    "▶",
-                                    color = Color(0x66FFFFFF),
-                                    fontSize = 32.sp,
-                                    modifier = Modifier.align(Alignment.Center)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(28.dp))
-                        Column {
-                            TvActionButton(
-                                text = if (lastWatched != null) {
-                                    "继续播放 第 ${lastWatched + 1} 集"
-                                } else {
-                                    "开始播放"
-                                },
-                                onClick = { openPlayer(startIndex) },
-                                primary = true,
-                                modifier = Modifier.focusRequester(playFocus)
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Row {
-                                TvActionButton(
-                                    text = if (favorite) "★ 已收藏" else "★ 收藏",
-                                    onClick = onToggleFavorite
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                TvActionButton(
-                                    text = if (encrypted) "已加密" else "加密",
-                                    onClick = onToggleEncrypt
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                TvActionButton(
-                                    text = "移出影库",
-                                    onClick = { confirmDelete = true }
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                TvActionButton(
-                                    text = "彻底删除",
-                                    onClick = { confirmPurge = true }
-                                )
-                            }
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = "提示：3 秒后自动收起；收起后左右键快进快退，其他键唤出菜单",
-                                color = TextSecondary,
-                                fontSize = 11.sp
-                            )
-                        }
+                        TvActionButton(
+                            text = when {
+                                group.episodes.size <= 1 ->
+                                    if (lastWatched != null) "继续播放" else "开始播放"
+                                lastWatched != null -> "播放第 ${lastWatched + 1} 集"
+                                else -> "开始播放"
+                            },
+                            onClick = { openPlayer(startIndex) },
+                            primary = true,
+                            large = true,
+                            modifier = Modifier.focusRequester(playFocus)
+                        )
                     }
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TvActionButton(
+                            text = if (favorite) "★ 已收藏" else "★ 收藏",
+                            onClick = onToggleFavorite,
+                            large = true
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        TvActionButton(
+                            text = if (encrypted) "已加密" else "加密",
+                            onClick = onToggleEncrypt,
+                            large = true
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        TvActionButton(
+                            text = if (poster != null) "更换海报" else "选择海报",
+                            onClick = {
+                                coverDialogOpen = true
+                                coverCandidates = null
+                                onLoadCoverCandidates { coverCandidates = it }
+                            },
+                            large = true
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        TvActionButton(
+                            text = "移出影库",
+                            onClick = { confirmDelete = true },
+                            large = true
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        TvActionButton(
+                            text = "彻底删除",
+                            onClick = { confirmPurge = true },
+                            large = true
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "2 秒后自动播放；收起后左右键快进快退，其他键唤出菜单",
+                        color = Color(0x99FFFFFF),
+                        fontSize = 11.sp
+                    )
                     if (group.episodes.size > 1) {
                         Spacer(Modifier.height(22.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -436,12 +507,11 @@ fun SeriesScreen(
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(PAGE_SIZE),
                             state = gridState,
-                            contentPadding = PaddingValues(bottom = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 12.dp)
+                                .height(52.dp)
                         ) {
                             itemsIndexed(pageEpisodes, key = { _, episode -> episode.path }) { localIndex, episode ->
                                 val index = page * PAGE_SIZE + localIndex
@@ -505,6 +575,89 @@ fun SeriesScreen(
         }
     }
 
+
+    if (coverDialogOpen) {
+        Dialog(
+            onDismissRequest = { coverDialogOpen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            BackHandler(enabled = true) { coverDialogOpen = false }
+            val candidates = coverCandidates
+            Column(
+                modifier = Modifier
+                    .width(708.dp)
+                    .background(SurfaceDark, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 24.dp, vertical = 20.dp)
+            ) {
+                Text("选择海报", color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(14.dp))
+                when {
+                    candidates == null -> Text(
+                        "正在获取海报…",
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 28.dp)
+                    )
+
+                    candidates.isEmpty() -> Text(
+                        "没有找到可用海报，请检查网络后重试",
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 28.dp)
+                    )
+
+                    else -> {
+                        val firstFocus = remember { FocusRequester() }
+                        LaunchedEffect(candidates) {
+                            runCatching { firstFocus.requestFocus() }
+                        }
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(4),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier
+                                .width(660.dp)
+                                .height(292.dp)
+                        ) {
+                            itemsIndexed(candidates) { index, candidate ->
+                                val bitmap = remember(candidate) {
+                                    BitmapFactory.decodeByteArray(
+                                        candidate.preview,
+                                        0,
+                                        candidate.preview.size
+                                    )?.asImageBitmap()
+                                }
+                                FocusableCard(
+                                    onClick = {
+                                        onChooseCover(candidate.full)
+                                        coverDialogOpen = false
+                                    },
+                                    modifier = Modifier
+                                        .width(156.dp)
+                                        .aspectRatio(16f / 9f)
+                                        .then(
+                                            if (index == 0) Modifier.focusRequester(firstFocus)
+                                            else Modifier
+                                        )
+                                ) { _ ->
+                                    if (bitmap != null) {
+                                        Image(
+                                            bitmap = bitmap,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                TvActionButton(text = "取消", onClick = { coverDialogOpen = false })
+            }
+        }
+    }
 
     if (confirmDelete) {
         ConfirmDialog(

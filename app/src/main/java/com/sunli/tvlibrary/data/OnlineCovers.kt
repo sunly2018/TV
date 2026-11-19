@@ -1,9 +1,11 @@
 package com.sunli.tvlibrary.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -22,8 +24,21 @@ class CoverStore(context: Context) {
     fun readAll(): Map<String, String> =
         dir.listFiles()
             ?.filter { it.isFile && it.name.endsWith(".jpg") && it.length() > 0 }
-            ?.associate { it.nameWithoutExtension to it.absolutePath }
+            ?.mapNotNull { file ->
+                if (isLandscape(file)) {
+                    file.nameWithoutExtension to file.absolutePath
+                } else {
+                    null
+                }
+            }
+            ?.toMap()
             .orEmpty()
+
+    private fun isLandscape(file: File): Boolean {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, options)
+        return options.outWidth > 0 && options.outWidth >= options.outHeight * 1.2f
+    }
 
     fun save(groupId: String, bytes: ByteArray): String? = runCatching {
         val target = fileOf(groupId)
@@ -42,8 +57,10 @@ class CoverStore(context: Context) {
     }
 }
 
+class CoverCandidate(val full: ByteArray, val preview: ByteArray)
+
 /**
- * 按片名从 Bing 图片搜索抓海报。返回裁剪成 2:3 的 JPEG 字节；找不到可靠结果时返回 null。
+ * 按片名从 Bing 图片搜索抓海报，只保留横版（宽高比 ≥ 1.2）的图片；找不到时返回 null。
  */
 class CoverFetcher {
 
@@ -62,15 +79,60 @@ class CoverFetcher {
             val body = request(url)?.toString(Charsets.UTF_8) ?: continue
             for (thumb in candidates(body, wanted)) {
                 val bytes = request(thumb, binary = true) ?: continue
-                if (isPoster(bytes)) return@withContext bytes
+                if (isLandscape(bytes)) return@withContext bytes
             }
         }
         null
     }
 
+    /** 同一次搜索取多个候选，供手动挑选海报。 */
+    suspend fun fetchCandidates(title: String, limit: Int = 12): List<CoverCandidate> =
+        withContext(Dispatchers.IO) {
+            val query = normalize(title)
+            if (query.length < 2 || isCameraName(title)) return@withContext emptyList()
+            val wanted = compact(query)
+            val result = mutableListOf<CoverCandidate>()
+            val seen = HashSet<String>()
+            for (search in searchQueries(title, query)) {
+                val url = try {
+                    "https://www.bing.com/images/async?q=" +
+                        URLEncoder.encode(search, "UTF-8") +
+                        "&first=1&count=35&mkt=zh-CN"
+                } catch (t: Throwable) {
+                    continue
+                }
+                val body = request(url)?.toString(Charsets.UTF_8) ?: continue
+                for (thumb in candidates(body, wanted)) {
+                    if (!seen.add(thumb)) continue
+                    val bytes = request(thumb, binary = true) ?: continue
+                    if (!isLandscape(bytes)) continue
+                    result += CoverCandidate(bytes, previewOf(bytes))
+                    if (result.size >= limit) return@withContext result
+                }
+            }
+            result
+        }
+
+    private fun previewOf(bytes: ByteArray): ByteArray = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 360) sample *= 2
+        val bitmap = BitmapFactory.decodeByteArray(
+            bytes, 0, bytes.size,
+            BitmapFactory.Options().apply { inSampleSize = sample }
+        ) ?: return@runCatching bytes
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        bitmap.recycle()
+        out.toByteArray()
+    }.getOrDefault(bytes)
+
     private fun searchQueries(title: String, query: String): List<String> {
         val base = title.trim().take(40).ifBlank { query }
-        return listOf("$base 海报", "$base 电影", base)
+        // 「大决战之平津战役」这类片名，去掉「之」搜到的结果更贴切
+        val plain = base.replace("之", " ")
+        return listOf("$base 海报", "$base 电影", plain, base)
             .map { SPACES.replace(it, " ").trim() }
             .distinct()
     }
@@ -89,20 +151,20 @@ class CoverFetcher {
     }
 
     private fun posterUrl(thumb: String): String =
-        thumb + (if (thumb.contains("?")) "&" else "?") + "w=780&h=1170&c=7&rs=1"
+        thumb + (if (thumb.contains("?")) "&" else "?") + "w=1280&rs=1"
 
-    private fun isPoster(bytes: ByteArray): Boolean {
+    private fun isLandscape(bytes: ByteArray): Boolean {
         if (bytes.size < 4_000) return false
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        return options.outWidth >= 300 && options.outHeight >= 400
+        return options.outWidth >= 300 && options.outWidth >= options.outHeight * 1.2f
     }
 
     private fun field(raw: String, name: String): String? =
         Regex("\"" + name + "\":\"([^\"]*)\"").find(raw)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
 
     private fun compact(text: String): String =
-        normalize(text).replace(PUNCTUATION, "")
+        normalize(text).replace(PUNCTUATION, "").replace("之", "")
 
     private fun decodeEntities(raw: String): String = raw
         .replace("&quot;", "\"")

@@ -419,6 +419,10 @@ fun TvLibraryApp(viewModel: LibraryViewModel = viewModel()) {
                             screen = Screen.Home
                         },
                         onPurge = { purgeGroup(group) },
+                        onLoadCoverCandidates = { onResult ->
+                            viewModel.loadCoverCandidates(group.id) { onResult(it) }
+                        },
+                        onChooseCover = { bytes -> viewModel.saveCoverBytes(group.id, bytes) },
                         onPlay = { index ->
                             seriesFocus = seriesFocus + (group.id to index)
                             screen = Screen.Player(group.id, index, fromDetail = true)

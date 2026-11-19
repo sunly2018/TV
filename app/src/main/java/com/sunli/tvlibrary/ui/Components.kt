@@ -2,10 +2,12 @@ package com.sunli.tvlibrary.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,9 +17,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -180,7 +184,6 @@ fun MediaCard(
     progress: Float = 0f,
     favorite: Boolean = false,
     selectionMark: Boolean? = null,
-    fitImage: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -192,34 +195,12 @@ fun MediaCard(
                     .background(SurfaceLight)
             )
             if (imageModel != null) {
-                if (fitImage) {
-                    // 竖版网络海报：铺底做暗色氛围 + 完整居中，避免横版卡片把海报裁掉大半
-                    AsyncImage(
-                        model = imageModel,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                scaleX = 1.12f
-                                scaleY = 1.12f
-                                alpha = 0.18f
-                            }
-                    )
-                    AsyncImage(
-                        model = imageModel,
-                        contentDescription = title,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    AsyncImage(
-                        model = imageModel,
-                        contentDescription = title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                AsyncImage(
+                    model = imageModel,
+                    contentDescription = title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("▶", color = Color(0x66FFFFFF), fontSize = 30.sp)
@@ -372,7 +353,8 @@ fun TvActionButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    primary: Boolean = false
+    primary: Boolean = false,
+    large: Boolean = false
 ) {
     FocusableCard(
         onClick = onClick,
@@ -389,12 +371,69 @@ fun TvActionButton(
                     primary -> PrimaryButtonText
                     else -> TextPrimary
                 },
-                fontSize = 14.sp,
+                fontSize = if (large) 18.sp else 14.sp,
                 fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                modifier = Modifier.padding(
+                    horizontal = if (large) 24.dp else 14.dp,
+                    vertical = if (large) 15.dp else 10.dp
+                )
             )
         }
+    }
+}
+
+@Composable
+fun TvSwitch(
+    checked: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.06f else 1f, label = "switchScale")
+    val trackColor by animateColorAsState(
+        if (checked) {
+            if (IsDarkTheme) Color(0xFF2196F3) else Color(0xFF1976D2)
+        } else if (IsDarkTheme) {
+            Color(0xFF3B434F)
+        } else {
+            Color(0xFFC3CAD4)
+        },
+        label = "switchTrack"
+    )
+    val borderColor by animateColorAsState(
+        if (focused) FocusRing else Color.Transparent,
+        label = "switchBorder"
+    )
+    val thumbX by animateDpAsState(if (checked) 27.dp else 3.dp, label = "switchThumb")
+    Box(
+        modifier = modifier
+            .size(width = 56.dp, height = 32.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(50))
+            .background(trackColor)
+            .border(2.dp, borderColor, RoundedCornerShape(50))
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                val centerKey = event.key == Key.DirectionCenter ||
+                    event.key == Key.Enter ||
+                    event.key == Key.NumPadEnter
+                if (!centerKey) return@onPreviewKeyEvent false
+                if (event.type == KeyEventType.KeyUp) onToggle()
+                true
+            }
+            .focusable()
+    ) {
+        Box(
+            Modifier
+                .align(Alignment.CenterStart)
+                .offset(x = thumbX)
+                .size(26.dp)
+                .background(if (checked) Color.White else Color(0xFFE9EDF2), CircleShape)
+        )
     }
 }
 

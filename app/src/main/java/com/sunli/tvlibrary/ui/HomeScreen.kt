@@ -1002,7 +1002,6 @@ private fun GroupGrid(
                 progress = progress,
                 favorite = group.id in favoriteIds,
                 selectionMark = selectedIds?.contains(group.id),
-                fitImage = covers[group.id] != null,
                 onLongClick = { onLongPress(group) },
                 modifier = Modifier
                     .aspectRatio(16f / 9f)
@@ -1109,7 +1108,6 @@ private fun HistoryGrid(
                 },
                 subtitle = "看到 ${formatDuration(entry.positionMs)}  ·  ${formatAgo(entry.lastTime)}",
                 progress = entry.progress,
-                fitImage = covers[entry.group.id] != null,
                 onLongClick = { onLongPress(entry.group) },
                 modifier = Modifier
                     .aspectRatio(16f / 9f)
@@ -1389,8 +1387,7 @@ private fun ItemSectionsView(
                             progress = progress,
                             favorite = group.id in favoriteIds,
                             selectionMark = selectedGroupIds?.contains(group.id),
-                            fitImage = covers[group.id] != null,
-                            onLongClick = { onLongPressGroup(group) },
+                                        onLongClick = { onLongPressGroup(group) },
                             modifier = Modifier
                                 .width(220.dp)
                                 .aspectRatio(16f / 9f)
@@ -1671,8 +1668,7 @@ private fun EncryptedSectionsView(
                             subtitle = group.episodes.firstOrNull()?.let { formatSize(it.sizeBytes) },
                             progress = progress,
                             favorite = group.id in favoriteIds,
-                            fitImage = covers[group.id] != null,
-                            onLongClick = { onLongPressGroup(group) },
+                                        onLongClick = { onLongPressGroup(group) },
                             modifier = Modifier
                                 .aspectRatio(16f / 9f)
                                 .then(

@@ -54,10 +54,12 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -151,6 +153,9 @@ fun PlayerScreen(
     var outroSkipped by remember { mutableStateOf(false) }
     val positionMs = remember { mutableLongStateOf(0L) }
     val durationMs = remember { mutableLongStateOf(0L) }
+    // 连按快进时的落点基准：控件收起后缓存进度不再刷新，不能拿它当基准
+    val lastSeekAt = remember { mutableLongStateOf(0L) }
+    val lastSeekTarget = remember { mutableLongStateOf(0L) }
     val skipIntroNow = rememberUpdatedState(skipIntro)
     val seekTick = remember { mutableIntStateOf(0) }
     val seekPreview = remember { mutableStateOf<Bitmap?>(null) }
@@ -248,6 +253,7 @@ fun PlayerScreen(
         ioRetries.intValue = 0
         seekPreview.value = null
         previewJob.value?.cancel()
+        lastSeekAt.longValue = 0L
         audioDefaultApplied = false
         audioOptions.value = emptyList()
         audioCurrent.value = null
@@ -299,8 +305,17 @@ fun PlayerScreen(
     fun seekBy(deltaMs: Long) {
         val duration = exoPlayer.duration
         val upper = if (duration > 0) duration else Long.MAX_VALUE
-        val base = positionMs.longValue.takeIf { it > 0 } ?: exoPlayer.currentPosition
+        val now = SystemClock.uptimeMillis()
+        // 2 秒内连续快进以上一次的目标为基准逐次叠加，避免 seek 尚未生效时又退回旧位置；
+        // 隔久了则从真实播放位置算
+        val base = if (now - lastSeekAt.longValue < 2_000L) {
+            lastSeekTarget.longValue
+        } else {
+            exoPlayer.currentPosition.coerceAtLeast(0L)
+        }
         val target = (base + deltaMs).coerceIn(0L, upper)
+        lastSeekAt.longValue = now
+        lastSeekTarget.longValue = target
         positionMs.longValue = target
         exoPlayer.seekTo(target)
         controlsVisible.value = true
@@ -332,6 +347,7 @@ fun PlayerScreen(
         outroSkipped = false
         seekPreview.value = null
         previewJob.value?.cancel()
+        lastSeekAt.longValue = 0L
         exoPlayer.seekTo(0L)
         exoPlayer.play()
         controlsVisible.value = true
@@ -468,6 +484,7 @@ fun PlayerScreen(
 
     LaunchedEffect(exoPlayer) {
         var sinceSave = 0L
+        var lastOutroLogAt = 0L
         while (true) {
             // 控件收起时没人看进度，别每 500ms 写一次状态，弱机上会拖慢整帧导致按键要等很久
             if (controlsVisible.value || panelVisible.value) {
@@ -480,13 +497,25 @@ fun PlayerScreen(
                     sinceSave = 0L
                     saveCurrentProgress()
                 }
-                if (skipIntroNow.value && !outroSkipped && !ended.value) {
-                    val duration = exoPlayer.duration.coerceAtLeast(0L)
-                    val remaining = duration - exoPlayer.currentPosition.coerceAtLeast(0L)
-                    if (duration >= SKIP_MIN_DURATION_MS && remaining in 1..SKIP_INTRO_MS) {
-                        outroSkipped = true
-                        exoPlayer.seekTo(duration)
-                    }
+            }
+            // 片尾缓冲时 isPlaying 会短暂变成 false，用 playWhenReady 判断；用户暂停时它也是 false，不会误跳
+            if (exoPlayer.playWhenReady && skipIntroNow.value && !outroSkipped && !ended.value) {
+                val duration = exoPlayer.duration.coerceAtLeast(0L)
+                val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+                val remaining = duration - pos
+                if (duration >= SKIP_MIN_DURATION_MS && remaining in 1..SKIP_INTRO_MS) {
+                    outroSkipped = true
+                    exoPlayer.seekTo(duration)
+                }
+                val now = SystemClock.uptimeMillis()
+                if (duration >= SKIP_MIN_DURATION_MS && remaining <= 300_000L &&
+                    now - lastOutroLogAt >= 30_000L
+                ) {
+                    lastOutroLogAt = now
+                    android.util.Log.i(
+                        "OutroSkip",
+                        "duration=${duration / 1000}s pos=${pos / 1000}s remaining=${remaining / 1000}s"
+                    )
                 }
             }
             delay(500L)
@@ -615,7 +644,12 @@ fun PlayerScreen(
         onExit(episodeIndex.intValue)
     }
 
-    Box(
+    // 关中匪事的 720p 片源是 14:9、画面下方自带约 17% 黑边（字幕烧录在黑边里），整帧铺满时画面上沿会贴顶。
+    // 这里把整帧按比例放大到超出屏幕高度：上方留 30dp，画面本身约 890px，帧底黑边只露出 65dp（130px）——
+    // 黑边里的字幕底沿约在露出部分的 100px 处，留出余量避免被裁；超出屏幕的帧底由窗口裁掉。其他片子正常满屏
+    val guanzhong = group.title.contains("关中匪事")
+
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
@@ -738,7 +772,22 @@ fun PlayerScreen(
                 }
             }
     ) {
-        VideoSurface(exoPlayer, Modifier.fillMaxSize())
+        val videoModifier = if (guanzhong) {
+            val topGap = 30.dp
+            val visibleBand = 65.dp
+            val frameHeight = (maxHeight - topGap - visibleBand) / 0.829f
+            Modifier.layout { measurable, constraints ->
+                val placeable = measurable.measure(
+                    Constraints.fixed(constraints.maxWidth, frameHeight.roundToPx())
+                )
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.place(0, topGap.roundToPx())
+                }
+            }
+        } else {
+            Modifier.fillMaxSize()
+        }
+        VideoSurface(exoPlayer, videoModifier)
 
         if (buffering.value && !ended.value && errorMessage.value == null) {
             CircularProgressIndicator(
@@ -883,8 +932,12 @@ fun PlayerScreen(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = buildString {
-                        append(currentTitle.value)
-                        append("  ·  第 ${episodeIndex.intValue + 1} / ${group.episodes.size} 集")
+                        if (group.episodes.size > 1) {
+                            append(currentTitle.value)
+                            append("  ·  第 ${episodeIndex.intValue + 1} / ${group.episodes.size} 集")
+                        } else {
+                            append(formatSize(group.episodes[episodeIndex.intValue].sizeBytes))
+                        }
                     },
                     color = Color(0xCCFFFFFF),
                     fontSize = 13.sp

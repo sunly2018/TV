@@ -345,6 +345,8 @@ class MediaScanner(private val context: Context) {
         RE_1X01.find(base)?.let { return it.groupValues[2].toIntOrNull() }
         RE_CN_EP.find(base)?.let { return it.groupValues[1].toIntOrNull() }
         RE_EP_WORD.find(base)?.let { return it.groupValues[1].toIntOrNull() }
+        // 集数标记直接粘在中文后面（如「走向共和未删减EP01」），中间没有分隔符
+        RE_EP_GLUED.find(base)?.let { return it.groupValues[1].toIntOrNull() }
         RE_CN_EP2.find(base)?.let { return it.groupValues[1].toIntOrNull() }
         RE_CN_EP_CN.find(base)?.let { match ->
             val n = chineseNumber(match.groupValues[1])
@@ -525,6 +527,7 @@ class MediaScanner(private val context: Context) {
         private val RE_1X01 = Regex("""(?i)(?:^|[\s._\[(-])(\d{1,2})x(\d{1,3})(?:[\s._\])-]|$)""")
         private val RE_CN_EP = Regex("""第\s*(\d{1,4})\s*[集话話期回]""")
         private val RE_EP_WORD = Regex("""(?i)(?:^|[\s._\[(-])(?:EP?|EPISODE)\s*[._-]?\s*(\d{1,4})\b""")
+        private val RE_EP_GLUED = Regex("""(?i)EP\s*[._-]?\s*(\d{1,3})\b""")
         private val RE_CN_EP2 = Regex("""(?:^|[\s._\[(-])(\d{1,3})\s*[集话話]""")
         private val RE_CN_EP_CN = Regex("""第\s*([一二三四五六七八九十]{1,3})\s*[集话話期回]""")
         private val RE_BARE_EPISODE = Regex("""^[\(（\[]\s*(\d{1,3})\s*[\)）\]]$""")
@@ -553,7 +556,7 @@ class MediaScanner(private val context: Context) {
         )
 
         private val SHOW_NAME_MARKERS = listOf(
-            RE_SXXEXX, RE_CN_EP, RE_EP_WORD, RE_CN_EP2, RE_CN_EP_CN, RE_1X01,
+            RE_SXXEXX, RE_CN_EP, RE_EP_WORD, RE_EP_GLUED, RE_CN_EP2, RE_CN_EP_CN, RE_1X01,
             RE_TRAILING_NUM, RE_LEADING_EPISODE, RE_ATTACHED_EP_MARK, RE_PAREN_EP_MARK,
             RE_ATTACHED_EP_SUFFIX_MARK
         )

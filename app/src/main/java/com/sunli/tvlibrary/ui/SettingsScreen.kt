@@ -52,7 +52,7 @@ fun SettingsScreen(
                 SettingsRow(
                     title = "跳过片头片尾",
                     subtitle = "片头片尾各跳过 90 秒，仅对 10 分钟以上的影片生效",
-                    action = if (skipIntro) "已开启" else "已关闭",
+                    checked = skipIntro,
                     onAction = onToggleSkipIntro,
                     onUpFromTop = onUpFromTop
                 )
@@ -63,13 +63,13 @@ fun SettingsScreen(
                 SettingsRow(
                     title = "显示照片",
                     subtitle = "关闭后照片栏隐藏，扫描时也不再加载照片",
-                    action = if (photosEnabled) "已开启" else "已关闭",
+                    checked = photosEnabled,
                     onAction = onTogglePhotos
                 )
                 SettingsRow(
                     title = "夜间模式",
                     subtitle = "深色背景更适合在电视上观看",
-                    action = if (darkTheme) "已开启" else "已关闭",
+                    checked = darkTheme,
                     onAction = onToggleTheme
                 )
             }
@@ -79,7 +79,7 @@ fun SettingsScreen(
                 SettingsRow(
                     title = "在线匹配封面",
                     subtitle = "按片名从网络匹配海报，用作影片卡片和详情页背景",
-                    action = if (onlineCovers) "已开启" else "已关闭",
+                    checked = onlineCovers,
                     onAction = onToggleOnlineCovers
                 )
                 SettingsRow(
@@ -99,7 +99,7 @@ fun SettingsScreen(
                         upload.running -> "已接收 ${upload.count} 个文件，保存在 ${upload.target}"
                         else -> "开启后在同一 Wi-Fi 的电脑浏览器里打开下面的地址"
                     },
-                    action = if (upload.running) "已开启" else "已关闭",
+                    checked = upload.running,
                     onAction = onToggleUpload
                 )
                 if (upload.running) {
@@ -176,8 +176,9 @@ private fun SettingsGroup(
 private fun SettingsRow(
     title: String,
     subtitle: String,
-    action: String,
     onAction: () -> Unit,
+    action: String? = null,
+    checked: Boolean? = null,
     onUpFromTop: (() -> Unit)? = null
 ) {
     Row(
@@ -201,14 +202,23 @@ private fun SettingsRow(
             )
         }
         Spacer(Modifier.width(20.dp))
-        TvActionButton(
-            text = action,
-            onClick = onAction,
-            modifier = if (onUpFromTop != null) {
-                Modifier.blockUpFromTop({ true }, onUpFromTop)
-            } else {
-                Modifier
-            }
-        )
+        val actionModifier = if (onUpFromTop != null) {
+            Modifier.blockUpFromTop({ true }, onUpFromTop)
+        } else {
+            Modifier
+        }
+        if (checked != null) {
+            TvSwitch(
+                checked = checked,
+                onToggle = onAction,
+                modifier = actionModifier
+            )
+        } else if (action != null) {
+            TvActionButton(
+                text = action,
+                onClick = onAction,
+                modifier = actionModifier
+            )
+        }
     }
 }
