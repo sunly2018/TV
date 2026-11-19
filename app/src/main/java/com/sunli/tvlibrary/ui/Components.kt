@@ -4,7 +4,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -44,19 +48,28 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -485,9 +498,10 @@ fun RenameDialog(
     title: String,
     initial: String,
     onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    hint: String = "只改影库里的显示名称，硬盘上的文件不动",
+    maxLength: Int = 40
 ) {
-    val maxLength = 40
     Dialog(onDismissRequest = onDismiss) {
         BackHandler(enabled = true) { onDismiss() }
         var text by remember(initial) { mutableStateOf(initial) }
@@ -507,7 +521,7 @@ fun RenameDialog(
         ) {
             Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text(
-                text = "只改影库里的显示名称，硬盘上的文件不动",
+                text = hint,
                 color = TextSecondary,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp)
@@ -595,6 +609,7 @@ fun EpisodeChip(
     current: Boolean,
     progress: Float,
     modifier: Modifier = Modifier,
+    subtitle: String = "",
     onClick: () -> Unit
 ) {
     FocusableCard(
@@ -634,6 +649,78 @@ fun EpisodeChip(
                             .background(if (IsDarkTheme) Color.White else Color(0xFF1B1F26))
                     )
                 }
+            }
+        }
+        if (focused && subtitle.isNotBlank()) {
+            EpisodeSubtitleBubble(subtitle)
+        }
+    }
+}
+
+/**
+ * 焦点落在选集格时在上方弹出回目气泡，回目过长时水平循环滚动。
+ * 气泡单独开窗，不受选集行/网格的裁剪限制。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun EpisodeSubtitleBubble(text: String) {
+    val density = LocalDensity.current
+    val gap = with(density) { 6.dp.roundToPx() }
+    val positionProvider = remember(gap) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize
+            ): IntOffset {
+                val x = anchorBounds.center.x - popupContentSize.width / 2
+                val maxX = (windowSize.width - popupContentSize.width).coerceAtLeast(0)
+                val y = anchorBounds.top - popupContentSize.height - gap
+                return IntOffset(x.coerceIn(0, maxX), y.coerceAtLeast(0))
+            }
+        }
+    }
+    Popup(
+        popupPositionProvider = positionProvider,
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier
+                    .background(Color(0xFFF4F6F8), RoundedCornerShape(8.dp))
+                    .border(1.dp, Color(0x22000000), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = text,
+                    color = Color(0xFF1B1F26),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier
+                        .widthIn(max = 320.dp)
+                        .basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            repeatDelayMillis = 1200,
+                            initialDelayMillis = 400,
+                            velocity = 64.dp
+                        )
+                )
+            }
+            Canvas(Modifier.size(14.dp, 7.dp)) {
+                val path = Path().apply {
+                    moveTo(0f, 0f)
+                    lineTo(size.width, 0f)
+                    lineTo(size.width / 2f, size.height)
+                    close()
+                }
+                drawPath(path, Color(0xFFF4F6F8))
             }
         }
     }

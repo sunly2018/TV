@@ -36,7 +36,8 @@ class LibraryCache(context: Context) {
                                     title = e.optString("title"),
                                     season = e.optInt("season", 1),
                                     number = e.optInt("number", 0),
-                                    sizeBytes = e.optLong("size")
+                                    sizeBytes = e.optLong("size"),
+                                    subtitle = e.optString("subtitle")
                                 )
                             )
                         }
@@ -94,6 +95,7 @@ class LibraryCache(context: Context) {
                         .put("season", e.season)
                         .put("number", e.number)
                         .put("size", e.sizeBytes)
+                        .put("subtitle", e.subtitle)
                 )
             }
             gJson.put("episodes", epsJson)
@@ -120,6 +122,6 @@ class LibraryCache(context: Context) {
     }
 
     private companion object {
-        const val VERSION = 6
+        const val VERSION = 7
     }
 }

@@ -12,7 +12,9 @@ data class Episode(
     val title: String,
     val season: Int,
     val number: Int,
-    val sizeBytes: Long
+    val sizeBytes: Long,
+    // 回目：从文件名里带的章节名，如「郭女侠怒砸同福店 佟掌柜妙点迷路人」
+    val subtitle: String = ""
 )
 
 data class MediaGroup(

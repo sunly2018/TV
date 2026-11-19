@@ -137,6 +137,33 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { cache.save(next) }
     }
 
+    /**
+     * 只改影库里这一集的回目，硬盘上的文件不动。
+     */
+    fun renameEpisode(path: String, subtitle: String) {
+        val text = subtitle.trim().take(60)
+        if (text.isEmpty()) return
+        val library = _ui.value.library ?: return
+        var found = false
+        val next = library.copy(
+            groups = library.groups.map { group ->
+                val episodes = group.episodes.map { episode ->
+                    if (episode.path == path) {
+                        found = true
+                        episode.copy(subtitle = text)
+                    } else {
+                        episode
+                    }
+                }
+                if (episodes == group.episodes) group else group.copy(episodes = episodes)
+            }
+        )
+        if (!found) return
+        renames.renameEpisode(path, text)
+        _ui.update { it.copy(library = next) }
+        viewModelScope.launch(Dispatchers.IO) { cache.save(next) }
+    }
+
     fun toggleGroupEncrypted(id: String) = encryptedStore.toggleGroup(id)
 
     fun togglePhotoEncrypted(path: String) = encryptedStore.togglePhoto(path)
@@ -152,6 +179,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         renames.clearGroup(id)
         pinnedStore.removeGroup(id)
         val library = _ui.value.library ?: return
+        library.groups.firstOrNull { it.id == id }?.episodes?.forEach { renames.clearEpisode(it.path) }
         val next = library.copy(groups = library.groups.filter { it.id != id })
         _ui.update { it.copy(library = next) }
         viewModelScope.launch(Dispatchers.IO) { cache.save(next) }
@@ -182,6 +210,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             }
             group?.posterPath?.let { runCatching { File(it).delete() } }
             if (group != null && failed.isEmpty()) {
+                group.episodes.forEach { renames.clearEpisode(it.path) }
                 removeGroupFromLibrary(group.id)
             } else if (group != null) {
                 deleteGroup(group.id)
@@ -234,6 +263,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
                     favoritesStore.removeGroup(id)
                     encryptedStore.removeGroup(id)
                     renames.clearGroup(id)
+                    group.episodes.forEach { renames.clearEpisode(it.path) }
                     pinnedStore.removeGroup(id)
                     val library = _ui.value.library
                     if (library != null) {
@@ -397,6 +427,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         if (map.isEmpty()) return library
         fun fix(path: String) = map[path] ?: path
         playback.migrate(map)
+        renames.migrate(map)
         return library.copy(
             groups = library.groups.map { group ->
                 group.copy(

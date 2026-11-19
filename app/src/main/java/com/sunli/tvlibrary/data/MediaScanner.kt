@@ -135,7 +135,8 @@ class MediaScanner(private val context: Context) {
         val showName: String,
         val season: Int,
         val number: Int,
-        val selfShot: Boolean
+        val selfShot: Boolean,
+        val subtitle: String
     )
 
     private fun parseFile(file: File, seriesPrefixes: Set<String>, roots: List<File>): ParsedFile {
@@ -157,7 +158,8 @@ class MediaScanner(private val context: Context) {
             showName = if (number != null) showNameOf(base) else "",
             season = if (number != null) parseSeason(base) else 1,
             number = number ?: 0,
-            selfShot = selfShot
+            selfShot = selfShot,
+            subtitle = if (number != null) episodeSubtitle(base) else ""
         )
     }
 
@@ -289,7 +291,8 @@ class MediaScanner(private val context: Context) {
                     title = episodeTitle(p),
                     season = p.season,
                     number = p.number,
-                    sizeBytes = p.file.length()
+                    sizeBytes = p.file.length(),
+                    subtitle = p.subtitle
                 )
             }
         return MediaGroup(
@@ -339,6 +342,32 @@ class MediaScanner(private val context: Context) {
             p.number > 0 -> "第${p.number}集"
             else -> p.file.name.substringBeforeLast('.')
         }
+
+    /**
+     * 文件名里集数后面的部分当回目，如「01.第一回 郭女侠怒砸同福店 佟掌柜妙点迷路人」。
+     * 紧挨集数的「第一回/第 3 集」只算集号，回目只留章节名；没有正文则返回空。
+     */
+    private fun episodeSubtitle(base: String): String {
+        var cut = -1
+        for (regex in SHOW_NAME_MARKERS) {
+            val match = regex.find(base) ?: continue
+            val end = match.range.last + 1
+            if (cut < 0 || end < cut) cut = end
+        }
+        if (cut < 0 || cut >= base.length) return ""
+        var rest = base.substring(cut)
+        RE_CN_EP_HEAD.find(rest)?.let { rest = rest.substring(it.range.last + 1) }
+        // 回目整段包在括号里时（如「01.【郭女侠怒砸同福店】」）直接取括号内容
+        RE_SOLE_BRACKET.find(rest)?.let { rest = it.groupValues[1] }
+        val text = rest
+            .replace(RE_BRACKETS, " ")
+            .replace(RE_SEASON_CN, " ")
+            .replace(RE_RELEASE_JUNK, " ")
+            .replace(Regex("""[\s._]+"""), " ")
+            .trim(' ', '-', '_', '.', '·', '、')
+        if (text.length < 2 || text.all { it.isDigit() } || isGenericName(text)) return ""
+        return text.take(60)
+    }
 
     private fun parseEpisodeNumber(base: String): Int? {
         RE_SXXEXX.find(base)?.let { return it.groupValues[2].toIntOrNull() }
@@ -533,6 +562,11 @@ class MediaScanner(private val context: Context) {
         private val RE_BARE_EPISODE = Regex("""^[\(（\[]\s*(\d{1,3})\s*[\)）\]]$""")
         // 「01.第一回…」「12 第二十回…」这类以集数开头的剧集文件
         private val RE_LEADING_EPISODE = Regex("""^(\d{1,3})[.、_\-\s]+(?=\S)""")
+        // 回目前面紧跟的「第一回/第 3 集」序号
+        private val RE_CN_EP_HEAD =
+            Regex("""^[\s._\-、·]*第\s*[0-9一二三四五六七八九十百]{1,4}\s*[集话話期回]\s*""")
+        private val RE_SOLE_BRACKET =
+            Regex("""^[\s._\-]*[\[\(【（]([^\]\)】）]+)[\]\)】）][\s._\-]*$""")
         private val RE_TRAILING_NUM = Regex("""(?:^|[\s._\[(-])(\d{1,4})\s*$""")
         // 「奋斗01」「奋斗(01)」这类直接粘在剧名后的集数
         private val RE_ATTACHED_EPISODE = Regex("""^(.*?[\u4e00-\u9fff])\s*(\d{1,3})\s*$""")

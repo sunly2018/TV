@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -79,7 +80,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 private const val PAGE_SIZE = 10
-private const val MENU_HIDE_MS = 2000L
+private const val MENU_HIDE_MS = 3000L
 private const val SEEK_STEP_MS = 10_000L
 
 // 音量键交给系统处理，不唤出也不影响菜单倒计时
@@ -100,6 +101,7 @@ fun SeriesScreen(
     onPurge: () -> Unit,
     onLoadCoverCandidates: ((List<CoverCandidate>) -> Unit) -> Unit,
     onChooseCover: (ByteArray) -> Unit,
+    onRenameEpisode: (String, String) -> Unit = { _, _ -> },
     onPlay: (Int) -> Unit,
     onExit: () -> Unit
 ) {
@@ -122,6 +124,11 @@ fun SeriesScreen(
     var menuEpoch by remember { mutableIntStateOf(0) }
     var seekHintVisible by remember { mutableStateOf(false) }
     val seekHintEpoch = remember { mutableIntStateOf(0) }
+    // 改回目的目标集：跟随遥控器在选集格上移动，对话框打开时锁定
+    var episodeCursor by remember(group.id) {
+        mutableIntStateOf(if (focusIndex in group.episodes.indices) focusIndex else 0)
+    }
+    var renameEpisodeIndex by remember { mutableStateOf<Int?>(null) }
     val seekPosition = remember { mutableLongStateOf(0L) }
     val seekDuration = remember { mutableLongStateOf(0L) }
     val pageCount = ((group.episodes.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
@@ -242,9 +249,11 @@ fun SeriesScreen(
         onPlay(index)
     }
 
-    // 菜单露出后 1 秒没有操作就收起，直接进入播放；选海报/确认框期间不收起
-    LaunchedEffect(menuVisible, menuEpoch, confirmDelete, confirmPurge, coverDialogOpen) {
-        if (menuVisible && !confirmDelete && !confirmPurge && !coverDialogOpen) {
+    // 菜单露出后 3 秒没有操作就收起，直接进入播放；选海报/确认框/改回目期间不收起
+    LaunchedEffect(menuVisible, menuEpoch, confirmDelete, confirmPurge, coverDialogOpen, renameEpisodeIndex) {
+        if (menuVisible && !confirmDelete && !confirmPurge && !coverDialogOpen &&
+            renameEpisodeIndex == null
+        ) {
             delay(MENU_HIDE_MS)
             menuVisible = false
             runCatching { rootFocus.requestFocus() }
@@ -278,6 +287,7 @@ fun SeriesScreen(
     LaunchedEffect(group.id, focusIndex) {
         if (group.episodes.size > 1 && focusIndex in group.episodes.indices) {
             page = focusIndex / PAGE_SIZE
+            episodeCursor = focusIndex
             repeat(4) {
                 if (runCatching { episodeFocus.requestFocus() }.isSuccess) return@LaunchedEffect
                 runCatching { gridState.scrollToItem(focusIndex % PAGE_SIZE) }
@@ -479,7 +489,7 @@ fun SeriesScreen(
                     }
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "2 秒后自动播放；收起后左右键快进快退，其他键唤出菜单",
+                        text = "3 秒后自动播放；收起后左右键快进快退，其他键唤出菜单",
                         color = Color(0x99FFFFFF),
                         fontSize = 11.sp
                     )
@@ -501,6 +511,11 @@ fun SeriesScreen(
                                     }
                                 }
                             }
+                            Spacer(Modifier.weight(1f))
+                            TvActionButton(
+                                text = "改回目 · 第 ${episodeCursor + 1} 集",
+                                onClick = { renameEpisodeIndex = episodeCursor }
+                            )
                         }
                         Spacer(Modifier.height(12.dp))
                         val pageEpisodes = group.episodes.drop(page * PAGE_SIZE).take(PAGE_SIZE)
@@ -520,8 +535,12 @@ fun SeriesScreen(
                                     label = episodeLabel(index, episode.season, episode.number),
                                     current = index == focusIndex,
                                     progress = progress,
+                                    subtitle = episode.subtitle,
                                     modifier = Modifier
                                         .height(46.dp)
+                                        .onFocusChanged {
+                                            if (it.isFocused) episodeCursor = index
+                                        }
                                         .then(
                                             if (index == focusIndex) {
                                                 Modifier.focusRequester(episodeFocus)
@@ -682,6 +701,28 @@ fun SeriesScreen(
                 onPurge()
             },
             onDismiss = { confirmPurge = false }
+        )
+    }
+
+    val renameTarget = renameEpisodeIndex
+    if (renameTarget != null && renameTarget in group.episodes.indices) {
+        val episode = group.episodes[renameTarget]
+        RenameDialog(
+            title = "修改回目",
+            initial = episode.subtitle,
+            hint = "只改影库里这一集的回目，硬盘上的文件不动",
+            maxLength = 60,
+            onConfirm = { text ->
+                renameEpisodeIndex = null
+                onRenameEpisode(episode.path, text)
+                showMenu()
+                runCatching { episodeFocus.requestFocus() }
+            },
+            onDismiss = {
+                renameEpisodeIndex = null
+                showMenu()
+                runCatching { episodeFocus.requestFocus() }
+            }
         )
     }
 }

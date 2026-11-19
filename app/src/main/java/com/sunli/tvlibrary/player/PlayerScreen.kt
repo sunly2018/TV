@@ -124,6 +124,7 @@ fun PlayerScreen(
     onToggleFavorite: () -> Unit = {},
     onToggleEncrypt: () -> Unit = {},
     onRename: (String) -> Unit = {},
+    onRenameEpisode: (String, String) -> Unit = { _, _ -> },
     onDelete: () -> Unit = {},
     onPurge: () -> Unit = {},
     onPlayNext: (() -> Unit)? = null,
@@ -166,6 +167,8 @@ fun PlayerScreen(
     val confirmDelete = remember { mutableStateOf(false) }
     val confirmPurge = remember { mutableStateOf(false) }
     val showRename = remember { mutableStateOf(false) }
+    // 打开弹窗时记下目标集，避免播放到下一集后改错对象
+    val renameEpisodeTarget = remember { mutableStateOf<Pair<String, String>?>(null) }
     val externalHint = remember { mutableStateOf<String?>(null) }
     val audioOptions = remember { mutableStateOf<List<AudioTrackOption>>(emptyList()) }
     val audioCurrent = remember { mutableStateOf<AudioTrackOption?>(null) }
@@ -636,6 +639,24 @@ fun PlayerScreen(
         )
     }
 
+    renameEpisodeTarget.value?.let { (path, subtitle) ->
+        RenameDialog(
+            title = "修改回目",
+            initial = subtitle,
+            hint = "只改影库里这一集的回目，硬盘上的文件不动",
+            maxLength = 60,
+            onConfirm = { name ->
+                renameEpisodeTarget.value = null
+                onRenameEpisode(path, name)
+                closePanel()
+            },
+            onDismiss = {
+                renameEpisodeTarget.value = null
+                runCatching { panelFocus.requestFocus() }
+            }
+        )
+    }
+
     BackHandler(enabled = panelVisible.value) { closePanel() }
     BackHandler(enabled = !panelVisible.value) {
         saveCurrentProgress()
@@ -934,13 +955,18 @@ fun PlayerScreen(
                     text = buildString {
                         if (group.episodes.size > 1) {
                             append(currentTitle.value)
+                            val subtitle = group.episodes
+                                .getOrNull(episodeIndex.intValue)?.subtitle.orEmpty()
+                            if (subtitle.isNotBlank()) append("  ·  ").append(subtitle)
                             append("  ·  第 ${episodeIndex.intValue + 1} / ${group.episodes.size} 集")
                         } else {
                             append(formatSize(group.episodes[episodeIndex.intValue].sizeBytes))
                         }
                     },
                     color = Color(0xCCFFFFFF),
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -1084,6 +1110,16 @@ fun PlayerScreen(
                         text = "重命名",
                         onClick = { showRename.value = true }
                     )
+                    if (group.episodes.size > 1) {
+                        Spacer(Modifier.width(12.dp))
+                        TvActionButton(
+                            text = "改回目",
+                            onClick = {
+                                val episode = group.episodes[episodeIndex.intValue]
+                                renameEpisodeTarget.value = episode.path to episode.subtitle
+                            }
+                        )
+                    }
                     Spacer(Modifier.width(12.dp))
                     TvActionButton(
                         text = "移出影库",
@@ -1133,6 +1169,7 @@ fun PlayerScreen(
                                 label = episodeLabel(index, episode.season, episode.number),
                                 current = current,
                                 progress = prefs.progressOf(episode.path),
+                                subtitle = episode.subtitle,
                                 modifier = Modifier
                                     .size(62.dp)
                                     .then(

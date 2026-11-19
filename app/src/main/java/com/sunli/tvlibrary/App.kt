@@ -423,6 +423,9 @@ fun TvLibraryApp(viewModel: LibraryViewModel = viewModel()) {
                             viewModel.loadCoverCandidates(group.id) { onResult(it) }
                         },
                         onChooseCover = { bytes -> viewModel.saveCoverBytes(group.id, bytes) },
+                        onRenameEpisode = { path, subtitle ->
+                            viewModel.renameEpisode(path, subtitle)
+                        },
                         onPlay = { index ->
                             seriesFocus = seriesFocus + (group.id to index)
                             screen = Screen.Player(group.id, index, fromDetail = true)
@@ -470,6 +473,9 @@ fun TvLibraryApp(viewModel: LibraryViewModel = viewModel()) {
                                 screen = Screen.Home
                             },
                             onRename = { name -> viewModel.renameGroup(group.id, name) },
+                            onRenameEpisode = { path, subtitle ->
+                                viewModel.renameEpisode(path, subtitle)
+                            },
                             onPurge = { purgeGroup(group) },
                             onPlayNext = nextGroup?.let { next ->
                                 {
