@@ -65,7 +65,7 @@ import com.sunli.tvlibrary.ui.TvLibraryTheme
 
 private sealed interface Screen {
     data object Home : Screen
-    data class Series(val groupId: String) : Screen
+    data class Series(val groupId: String, val fromPlayer: Boolean = false) : Screen
     data class Player(
         val groupId: String,
         val startIndex: Int,
@@ -405,6 +405,7 @@ fun TvLibraryApp(viewModel: LibraryViewModel = viewModel()) {
                         encrypted = group.id in encrypted.groupIds,
                         focusIndex = seriesFocus[group.id] ?: -1,
                         coverPath = covers[group.id],
+                        initialPlayed = current.fromPlayer,
                         onToggleFavorite = { viewModel.toggleGroupFavorite(group.id) },
                         onToggleEncrypt = {
                             if (group.id in encrypted.groupIds) {
@@ -488,7 +489,7 @@ fun TvLibraryApp(viewModel: LibraryViewModel = viewModel()) {
                             onExit = { index ->
                                 seriesFocus = seriesFocus + (group.id to index)
                                 screen = if (current.fromDetail) {
-                                    Screen.Series(group.id)
+                                    Screen.Series(group.id, fromPlayer = true)
                                 } else {
                                     Screen.Home
                                 }

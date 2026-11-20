@@ -7,6 +7,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -45,6 +47,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -95,6 +98,8 @@ fun SeriesScreen(
     encrypted: Boolean,
     focusIndex: Int,
     coverPath: String? = null,
+    // 从播放页返回时为 true：菜单直接盖在画面上，不再铺海报
+    initialPlayed: Boolean = false,
     onToggleFavorite: () -> Unit,
     onToggleEncrypt: () -> Unit,
     onDelete: () -> Unit,
@@ -122,6 +127,13 @@ fun SeriesScreen(
     val rootFocus = remember { FocusRequester() }
     var menuVisible by remember(group.id) { mutableStateOf(true) }
     var menuEpoch by remember { mutableIntStateOf(0) }
+    // 首屏菜单收起（开播）后不再铺海报，之后唤出的菜单直接盖在正在播放的画面上
+    var playedOnce by remember(group.id) { mutableStateOf(initialPlayed) }
+    var previewPlaying by remember { mutableStateOf(false) }
+    var previewBuffering by remember { mutableStateOf(true) }
+    // OK 暂停后正中显示 ▶，再按继续播放后短暂显示 ⏸
+    var showPauseHint by remember { mutableStateOf(false) }
+    var pauseHintEpoch by remember { mutableIntStateOf(0) }
     var seekHintVisible by remember { mutableStateOf(false) }
     val seekHintEpoch = remember { mutableIntStateOf(0) }
     // 改回目的目标集：跟随遥控器在选集格上移动，对话框打开时锁定
@@ -200,7 +212,12 @@ fun SeriesScreen(
         val listener = object : Player.Listener {
             override fun onTracksChanged(tracks: Tracks) = syncAudio()
 
+            override fun onIsPlayingChanged(playing: Boolean) {
+                previewPlaying = playing
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
+                previewBuffering = playbackState == Player.STATE_BUFFERING
                 if (playbackState == Player.STATE_READY) syncAudio()
             }
         }
@@ -211,6 +228,23 @@ fun SeriesScreen(
     DisposableEffect(Unit) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
+    }
+
+    // 菜单收起后 OK 直接暂停/继续，不再用 OK 唤起菜单
+    fun togglePreview() {
+        if (exoPlayer.isPlaying) {
+            exoPlayer.pause()
+        } else {
+            exoPlayer.play()
+            pauseHintEpoch++
+        }
+    }
+
+    LaunchedEffect(pauseHintEpoch) {
+        if (pauseHintEpoch == 0) return@LaunchedEffect
+        showPauseHint = true
+        delay(1_200L)
+        showPauseHint = false
     }
 
     // 选海报要从同一个文件抽帧，必须放掉背景播放器的硬件解码器，否则抽帧会卡死；
@@ -256,6 +290,7 @@ fun SeriesScreen(
         ) {
             delay(MENU_HIDE_MS)
             menuVisible = false
+            playedOnce = true
             runCatching { rootFocus.requestFocus() }
         }
     }
@@ -356,6 +391,11 @@ fun SeriesScreen(
                             seekBy(-SEEK_STEP_MS)
                             return@onPreviewKeyEvent true
                         }
+
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.MediaPlayPause -> {
+                            if (!previewBuffering) togglePreview()
+                            return@onPreviewKeyEvent true
+                        }
                     }
                     showMenu()
                     return@onPreviewKeyEvent true
@@ -365,13 +405,53 @@ fun SeriesScreen(
             }
     ) {
         VideoSurface(exoPlayer, Modifier.fillMaxSize())
+
+        // OK 暂停时正中显示 ▶，再按继续播放后短暂显示 ⏸
+        val pausedForHint = !previewPlaying && !previewBuffering
+        if (!menuVisible && (pausedForHint || showPauseHint)) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(132.dp)
+                    .background(Color(0x73000000), RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (pausedForHint) {
+                    Canvas(Modifier.size(56.dp)) {
+                        val triangle = Path().apply {
+                            moveTo(size.width * 0.16f, 0f)
+                            lineTo(size.width, size.height / 2f)
+                            lineTo(size.width * 0.16f, size.height)
+                            close()
+                        }
+                        drawPath(triangle, Color.White)
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Box(
+                            Modifier
+                                .width(16.dp)
+                                .height(48.dp)
+                                .background(Color.White, RoundedCornerShape(4.dp))
+                        )
+                        Box(
+                            Modifier
+                                .width(16.dp)
+                                .height(48.dp)
+                                .background(Color.White, RoundedCornerShape(4.dp))
+                        )
+                    }
+                }
+            }
+        }
+
         AnimatedVisibility(
             visible = menuVisible,
             enter = fadeIn(tween(180)),
             exit = fadeOut(tween(320))
         ) {
             Box(Modifier.fillMaxSize()) {
-                if (poster != null) {
+                if (!playedOnce && poster != null) {
                     AsyncImage(
                         model = File(poster),
                         contentDescription = null,

@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -47,6 +48,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -143,6 +145,9 @@ fun PlayerScreen(
     }
     val currentTitle = remember { mutableStateOf(group.episodes[episodeIndex.intValue].title) }
     val isPlaying = remember { mutableStateOf(false) }
+    // OK 暂停后正中显示 ▶，恢复播放后短暂显示 ⏸
+    var showPauseHint by remember { mutableStateOf(false) }
+    var pauseHintEpoch by remember { mutableIntStateOf(0) }
     val buffering = remember { mutableStateOf(true) }
     val controlsVisible = remember { mutableStateOf(true) }
     val panelVisible = remember { mutableStateOf(false) }
@@ -340,9 +345,21 @@ fun PlayerScreen(
             onExit(episodeIndex.intValue)
             return
         }
-        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+        if (exoPlayer.isPlaying) {
+            exoPlayer.pause()
+        } else {
+            exoPlayer.play()
+            pauseHintEpoch++
+        }
         syncProgress()
         controlsVisible.value = true
+    }
+
+    LaunchedEffect(pauseHintEpoch) {
+        if (pauseHintEpoch == 0) return@LaunchedEffect
+        showPauseHint = true
+        delay(1_200L)
+        showPauseHint = false
     }
 
     fun restart() {
@@ -809,6 +826,48 @@ fun PlayerScreen(
             Modifier.fillMaxSize()
         }
         VideoSurface(exoPlayer, videoModifier)
+
+        // OK 暂停时正中显示 ▶，再按继续播放后短暂显示 ⏸
+        val pausedForHint = !isPlaying.value && !buffering.value && !ended.value &&
+            errorMessage.value == null
+        if ((pausedForHint || showPauseHint) && !panelVisible.value &&
+            !ended.value && errorMessage.value == null
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(132.dp)
+                    .background(Color(0x73000000), RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (pausedForHint) {
+                    Canvas(Modifier.size(56.dp)) {
+                        val triangle = Path().apply {
+                            moveTo(size.width * 0.16f, 0f)
+                            lineTo(size.width, size.height / 2f)
+                            lineTo(size.width * 0.16f, size.height)
+                            close()
+                        }
+                        drawPath(triangle, Color.White)
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Box(
+                            Modifier
+                                .width(16.dp)
+                                .height(48.dp)
+                                .background(Color.White, RoundedCornerShape(4.dp))
+                        )
+                        Box(
+                            Modifier
+                                .width(16.dp)
+                                .height(48.dp)
+                                .background(Color.White, RoundedCornerShape(4.dp))
+                        )
+                    }
+                }
+            }
+        }
 
         if (buffering.value && !ended.value && errorMessage.value == null) {
             CircularProgressIndicator(
