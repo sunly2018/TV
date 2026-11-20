@@ -492,8 +492,9 @@ fun PlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                saveCurrentProgress()
+            // 双击 Home 换应用时盒子只走 ON_PAUSE，不一定走到 ON_STOP，两种都要停
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                if (event == Lifecycle.Event.ON_STOP) saveCurrentProgress()
                 exoPlayer.pause()
                 controlsVisible.value = true
             }
